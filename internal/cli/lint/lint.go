@@ -16,6 +16,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -206,10 +207,13 @@ func LintFile(path string) ([]Violation, error) {
 
 			// Zero Trust Pillar 2: @business steps must use domain language only.
 			// UI/DOM vocabulary couples backend specs to frontend rendering.
+			// Whole-word matching prevents false positives (e.g. "dom" inside "domain").
 			if tier == "@business" {
 				lower := strings.ToLower(step.Text)
 				for _, word := range restrictedBusinessWords {
-					if strings.Contains(lower, word) {
+					pattern := `\b` + regexp.QuoteMeta(word) + `\b`
+					matched, _ := regexp.MatchString(pattern, lower)
+					if matched {
 						vs = append(vs, Violation{
 							File:    path,
 							Line:    int(step.Location.Line),
