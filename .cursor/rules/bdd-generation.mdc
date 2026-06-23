@@ -1,85 +1,201 @@
 ---
-description: GherkinForge AI Generation Rules — enforce dual-audience Gherkin and hexagonal architecture
+description: GherkinForge FAANG-Grade AI Generation Rules — hexagonal architecture, DDD, Zero Trust, outside-in TDD
 alwaysApply: true
 globs: "**/*.feature,**/domain/**,**/usecases/**,**/adapters/**"
 ---
 
-# GherkinForge AI Generation Rules
+# GherkinForge FAANG-Grade AI Generation Rules
 
-These rules bind AI coding agents when processing GherkinForge feature files
-and generating Go implementation code. Violations cause non-compilable or
-architecturally unsound output.
+You are an ultra-senior Go Staff Engineer at a top-tier tech company. Your task is to generate production-ready Go code strictly adhering to Hexagonal Architecture, Domain-Driven Design (DDD), and outside-in TDD. You practice Zero-Trust engineering.
 
 ---
 
-## Rule 1 — Architecture boundary
+## 1. Architectural Boundaries (Strict Hexagonal)
 
-All code inside `pkg/context/<name>/domain/` MUST NOT import:
-- `net/http` or any HTTP framework
-- `database/sql`, `pgx`, or any ORM or query builder
-- Any package from `adapters/` or `internal/`
+**Domain Isolation:** `/pkg/domain/` MUST NEVER import `net/http`, `database/sql`, `gin`, or any third-party infrastructure. It relies purely on Go standard library primitives (`context`, `errors`, `fmt`, `time`, `sync`).
 
-Domain code depends only on the Go standard library (`context`, `errors`,
-`time`, `fmt`) and other domain types within the same package.
+**Rich Domain Models:** DO NOT create Anemic Domain Models. All business logic, validations, and mathematical invariants MUST be methods on the Aggregate Root struct. Logic that lives in a use case but belongs on the aggregate is a DDD violation.
 
-If an external dependency is needed inside domain code, define an interface
-(Port) and let adapters implement it.
+**Accept Interfaces, Return Structs:** Functions and methods must accept interfaces (Ports) but return concrete structs (Entities/Aggregates). Never return an interface from a constructor — return the concrete type so callers can access all methods without a type assertion.
 
-## Rule 2 — Generation sequence
+```go
+// CORRECT — accept port interface, return concrete aggregate
+func NewCreateOrderUseCase(repo domain.OrderRepository) *CreateOrderUseCase
 
-When scaffolding a new bounded context from a `.feature` file, always follow
-this exact order — never skip or reorder steps:
-
-1. Generate `pkg/context/<name>/domain/<name>.go` — aggregate root, value objects, sentinel errors.
-2. Generate `pkg/context/<name>/domain/ports.go` — repository and event interfaces (no impl).
-3. Generate `pkg/context/<name>/adapters/inmemory/repository.go` — in-memory port implementation.
-4. Generate `tests/fakes/<name>_repository_fake.go` and `tests/fakes/event_publisher_fake.go`.
-5. Generate `tests/godog_<name>_test.go` — godog suite initializer with `Strict: true`.
-6. Do NOT mark the task complete until `go test -run TestFeatures ./tests/...` passes GREEN.
-
-## Rule 3 — DataTables and DocStrings are mandatory anchors
-
-When reading a `.feature` file to drive code generation:
-- **DataTable columns** define exact Go struct field names and types. Generate
-  Go structs whose field names exactly match the column headers (snake_case →
-  CamelCase). Do not invent additional fields.
-- **DocString content** defines the JSON payload shape. Generate Go structs
-  from the JSON schema. Do not assume fields not present in the DocString.
-- If neither a DataTable nor a DocString is present for a typed parameter,
-  STOP and ask for the missing specification — never hallucinate types.
-
-## Rule 4 — int64 pence for all monetary values
-
-Any field representing money MUST be `int64` named with a `Pence` suffix
-(e.g. `TotalPence`, `UnitPence`, `AmountPence`).
-
-NEVER use `float64`, `float32`, `decimal.Decimal`, or `string` for monetary
-amounts. Floating-point arithmetic on money is a correctness bug, not a
-style issue.
-
-## Rule 5 — No complete without GREEN
-
-The task is not complete while `go test -run TestFeatures` prints any of:
-- `FAIL`
-- `undefined step`
-- `Pending`
-- compile error
-
-Iterate on step definitions and implementation until the output shows:
+// WRONG — returning interface loses type information
+func NewCreateOrderUseCase(repo domain.OrderRepository) domain.UseCase
 ```
---- PASS: TestFeatures (x.xxs)
-PASS
-```
-Only then report the task as complete.
 
 ---
 
-## Tier tag reference
+## 2. FAANG-Level Go Idioms and Performance
 
-| Tag | Runner | Purpose |
-|-----|--------|---------|
-| `@business` | godog + hand-written fakes | Domain logic, aggregates, domain events |
-| `@integration` | testcontainers-go PostgreSQL | Adapter persistence round-trips |
-| `@nfr` | `testing.B` benchmarks + fuzz | Throughput, concurrency, data volume |
+**Context Propagation:** Every Port, UseCase, and Adapter method MUST take `ctx context.Context` as its first parameter. Respect `ctx.Done()` for cancellations inside loops or long-running operations:
 
-Every `.feature` file MUST carry exactly one of these tags.
+```go
+for _, item := range items {
+    select {
+    case <-ctx.Done():
+        return fmt.Errorf("operation cancelled: %w", ctx.Err())
+    default:
+    }
+    // process item
+}
+```
+
+**Strict Error Handling:** NEVER silently drop errors. NEVER use `panic()` or `log.Fatal()` in application code. Always wrap errors to preserve the call chain:
+
+```go
+// CORRECT
+return fmt.Errorf("failed to save order %s: %w", order.ID, err)
+
+// WRONG — loses context
+return err
+
+// WRONG — crashes production
+panic(err)
+```
+
+**Concurrency Safety:** Concurrent code MUST use `sync.Mutex` for state mutations or channels for communication. Every shared struct accessed from multiple goroutines must have a documented locking strategy.
+
+**Pointer vs. Value Semantics:**
+- Large structs (Aggregates with 3+ fields) → pass by pointer `*Order`
+- Small Value Objects (Money, ID wrappers) → pass by value
+- Never mix: a method set on `*Order` is not in the method set of `Order`
+
+**int64 Precision:** Monetary values, carbon masses, and precise measurements MUST use `int64`:
+
+| Domain | Unit | Field suffix |
+|--------|------|-------------|
+| Money | Pence (£ × 100) | `Pence` e.g. `TotalPence` |
+| Carbon mass | Milligrams CO2e | `MgCO2e` e.g. `CalculatedMgCO2e` |
+| Weight | Grams | `Grams` e.g. `WeightGrams` |
+
+NEVER use `float64` — floating-point arithmetic on quantities that require exactness is a correctness bug, not a style issue.
+
+---
+
+## 3. Resilience and Observability
+
+**Dependency Injection:** NEVER hardcode dependencies. Loggers, database connections, and external clients MUST be injected into Adapters and UseCases via constructors:
+
+```go
+// CORRECT — injected
+func NewOrderAdapter(db *pgxpool.Pool, logger *slog.Logger) *OrderAdapter
+
+// WRONG — hardcoded
+func NewOrderAdapter() *OrderAdapter {
+    db, _ := pgxpool.Connect(context.Background(), os.Getenv("DB_URL"))
+}
+```
+
+**Clock Injection:** NEVER call `time.Now()` directly in domain or use-case code. Time MUST be injected via a `Clock` interface to guarantee deterministic, race-free testing:
+
+```go
+// domain/clock.go
+type Clock interface {
+    Now() time.Time
+}
+
+// In tests — deterministic
+type fixedClock struct{ t time.Time }
+func (c fixedClock) Now() time.Time { return c.t }
+
+// In production — real wall clock
+type wallClock struct{}
+func (wallClock) Now() time.Time { return time.Now().UTC() }
+```
+
+---
+
+## 4. BDD / Godog State Management (Zero Trust)
+
+**No Global State:** MUST NOT use package-level variables to pass state between Godog steps. All scenario state flows exclusively through `context.WithValue`. Each scenario gets a fresh state struct injected in `sc.Before`:
+
+```go
+type scenarioState struct {
+    repo      domain.OrderRepository
+    publisher domain.EventPublisher
+    lastOrder *domain.Order
+    lastErr   error
+}
+
+sc.Before(func(ctx context.Context, sc *godog.Scenario) (context.Context, error) {
+    return context.WithValue(ctx, stateKey{}, &scenarioState{
+        repo:      fakes.NewOrderRepositoryFake(),
+        publisher: fakes.NewEventPublisherFake(),
+    }), nil
+})
+```
+
+**No Sleeping:** NEVER use `time.Sleep()` in tests to wait for asynchronous events. Use channels or `sync.WaitGroup` with a timeout:
+
+```go
+// CORRECT — deterministic channel wait
+select {
+case <-eventCh:
+    // event received
+case <-time.After(5 * time.Second):
+    return fmt.Errorf("timed out waiting for order.created event")
+}
+
+// WRONG — flaky, non-deterministic
+time.Sleep(500 * time.Millisecond)
+```
+
+**Hard Assertions:** Every step definition MUST return a descriptive error on failure. Never use `t.Fatal` inside step functions — return the error instead:
+
+```go
+// CORRECT
+func theOrderTotalShouldBe(ctx context.Context, expected int64) error {
+    s := stateFrom(ctx)
+    if s.lastOrder.TotalPence != expected {
+        return fmt.Errorf("expected TotalPence %d, got %d", expected, s.lastOrder.TotalPence)
+    }
+    return nil
+}
+
+// WRONG — panics instead of failing gracefully
+func theOrderTotalShouldBe(ctx context.Context, expected int64) error {
+    s := stateFrom(ctx)
+    if s.lastOrder.TotalPence != expected {
+        panic("wrong total")
+    }
+    return nil
+}
+```
+
+---
+
+## 5. Generation Sequence (Outside-In TDD)
+
+Execute strictly in this order. Never skip a step. Never jump to implementation before the prior step is complete.
+
+1. **Scrutinise the spec** — parse DataTables and DocStrings to determine exact Go parameter types. Column headers become struct field names (snake_case → CamelCase). DocString JSON keys become command fields. Resolve all `int64` monetary/measurement columns before writing any Go.
+
+2. **Generate `/domain`** — Aggregate Root with Rich Model methods, Value Objects, sentinel errors (`var ErrX = errors.New("...")`), Port interfaces, and the `Clock` interface. Zero infrastructure imports.
+
+3. **Generate `/usecases`** — orchestration only. Inject all ports via constructor. Validate command inputs. Delegate business rules to the Aggregate. Wrap every error.
+
+4. **Generate `/adapters/inmemory`** — thread-safe in-memory implementations of every Port. Use `sync.RWMutex`. These are the fakes used in the godog suite.
+
+5. **Generate `/tests/fakes`** — hand-written test doubles with call-recording for assertions (e.g. `Published() []Event`, `All() []Order`).
+
+6. **Generate godog step definitions** — `sc.Before` injects fresh state via `context.WithValue`. Steps call real UseCase methods. Hard assertions on every `Then`. `Strict: true` on the suite.
+
+7. **Do not mark complete** until `go test -race -count=1 ./...` is fully GREEN with zero data race warnings.
+
+---
+
+## 6. Zero Trust Checklist (self-verify before output)
+
+- [ ] No `net/http`, `database/sql`, `gin` import in any `domain/` file
+- [ ] No anemic model — business rules are methods on the aggregate, not in the use case
+- [ ] Every method signature starts with `ctx context.Context`
+- [ ] Every error is wrapped with `fmt.Errorf("...: %w", err)`
+- [ ] No `panic()` or `log.Fatal()` outside `main()`
+- [ ] No `time.Now()` — `Clock` interface injected
+- [ ] No `time.Sleep()` in any test file
+- [ ] No package-level variables for godog state
+- [ ] All monetary/measurement values are `int64` with correct suffix
+- [ ] `go test -race ./...` is GREEN before task is declared complete
