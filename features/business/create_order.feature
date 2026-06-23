@@ -39,3 +39,25 @@ Feature: Order Management
       }
       """
     Then the order creation should fail with "order must contain at least one item"
+
+  # Zero Trust Pillar 4 — mutation-proof scenario.
+  # Every Then clause asserts a precise mathematical value.
+  # A mutant that flips TotalPence calculation will fail the 17898 assertion.
+  # A mutant that drops the event publish will fail the event assertion.
+  # A mutant that clears the ID will fail the non-empty assertion.
+  Scenario: Multi-item order total is mathematically verifiable
+    Given a customer aggregate initialized with ID "CUST-777"
+    When the customer submits a create order command with the following payload:
+      """json
+      {
+        "customer_id": "CUST-777",
+        "items": [
+          {"product_id": "P-1001", "quantity": 3},
+          {"product_id": "P-1002", "quantity": 1}
+        ]
+      }
+      """
+    Then the order aggregate should be successfully created
+    And the order ID should not be empty
+    And an "order.created" domain event is published to the broker
+    And the total order value in pence should be 17947

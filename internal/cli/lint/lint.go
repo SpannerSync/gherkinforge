@@ -1,9 +1,13 @@
 // Package lint implements the `gforge lint` command.
 // It validates that every .feature file in the target directory tree:
-//   1. Has exactly one tier tag: @business, @integration, or @nfr.
-//   2. @business files use at least one DataTable or DocString to anchor types.
-//   3. No step text contains forbidden implementation symbols (SQL keywords,
-//      HTTP paths, selector strings, handler names).
+//
+//  1. Has exactly one tier tag: @business, @integration, or @nfr.
+//  2. @business files use at least one DataTable or DocString to anchor types.
+//  3. No step text contains forbidden implementation symbols (SQL keywords,
+//     HTTP paths, selector strings, handler names).
+//  4. ZERO TRUST Pillar 2: @business steps must not contain UI/DOM language
+//     (click, button, xpath, css selector, etc.) — these couple backend specs
+//     to frontend rendering, producing brittle tests.
 package lint
 
 import (
@@ -26,13 +30,50 @@ var validTiers = map[string]bool{
 	"@nfr":         true,
 }
 
-// forbiddenPatterns are substrings that must not appear in step text.
-// They indicate leakage of technical implementation detail into business specs.
+// forbiddenPatterns are substrings that must not appear in any step text
+// regardless of tier. They indicate technical implementation leaking into specs.
 var forbiddenPatterns = []string{
 	"data-testid",
 	"SELECT ", "INSERT ", "UPDATE ", "DELETE ",
 	"/api/", "/v1/", "/v2/",
 	".handler", ".service", "Handler{", "Service{",
+}
+
+// restrictedBusinessWords are terms that must not appear in @business tier step
+// text. They couple the domain specification to UI rendering decisions, producing
+// tests that break on cosmetic frontend changes.
+//
+// ZERO TRUST Pillar 2: the AI is not trusted to avoid these terms. The linter
+// enforces the rule before the AI is allowed to read the feature file.
+var restrictedBusinessWords = []string{
+	"click",
+	"button",
+	"dropdown",
+	"checkbox",
+	"radio button",
+	"scroll",
+	"hover",
+	"drag",
+	"xpath",
+	"css selector",
+	"data-testid",
+	"aria-label",
+	"id=",
+	"class=",
+	"div",
+	"span",
+	"input field",
+	"text box",
+	"modal",
+	"popup",
+	"tab key",
+	"keyboard",
+	"mouse",
+	"screen",
+	"pixel",
+	"viewport",
+	"browser",
+	"dom",
 }
 
 // Violation records a single lint failure.
@@ -152,7 +193,7 @@ func LintFile(path string) ([]Violation, error) {
 				hasDataTableOrDocString = true
 			}
 
-			// Rule 3: no forbidden implementation symbols in step text.
+			// Rule 3: no forbidden implementation symbols in any step text.
 			for _, forbidden := range forbiddenPatterns {
 				if strings.Contains(step.Text, forbidden) {
 					vs = append(vs, Violation{
@@ -160,6 +201,21 @@ func LintFile(path string) ([]Violation, error) {
 						Line:    int(step.Location.Line),
 						Message: fmt.Sprintf("forbidden symbol %q in step text — keep steps at business language level", forbidden),
 					})
+				}
+			}
+
+			// Zero Trust Pillar 2: @business steps must use domain language only.
+			// UI/DOM vocabulary couples backend specs to frontend rendering.
+			if tier == "@business" {
+				lower := strings.ToLower(step.Text)
+				for _, word := range restrictedBusinessWords {
+					if strings.Contains(lower, word) {
+						vs = append(vs, Violation{
+							File:    path,
+							Line:    int(step.Location.Line),
+							Message: fmt.Sprintf("ZERO TRUST VIOLATION: UI-specific term %q found in @business tier step — domain specs must be UI-agnostic", word),
+						})
+					}
 				}
 			}
 		}

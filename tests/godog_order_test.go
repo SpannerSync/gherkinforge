@@ -147,6 +147,16 @@ func theOrderCreationShouldFailWith(ctx context.Context, errMsg string) error {
 	return nil
 }
 
+// Zero Trust Pillar 4 — mutation-proof assertion: ID must be non-empty.
+// A mutant that clears the generated ID will fail this step.
+func theOrderIDShouldNotBeEmpty(ctx context.Context) error {
+	s := stateFrom(ctx)
+	if s.lastOrder.ID == "" {
+		return fmt.Errorf("ZERO TRUST: order ID is empty — mutant detected or aggregate construction failed")
+	}
+	return nil
+}
+
 // ── Suite wiring ─────────────────────────────────────────────────────────────
 
 func InitializeScenario(sc *godog.ScenarioContext) {
@@ -161,6 +171,7 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	sc.Step(`^an "([^"]*)" domain event is published to the broker$`, anDomainEventIsPublishedToTheBroker)
 	sc.Step(`^the total order value in pence should be (\d+)$`, theTotalOrderValueInPenceShouldBe)
 	sc.Step(`^the order creation should fail with "([^"]*)"$`, theOrderCreationShouldFailWith)
+	sc.Step(`^the order ID should not be empty$`, theOrderIDShouldNotBeEmpty)
 }
 
 func TestFeatures(t *testing.T) {
