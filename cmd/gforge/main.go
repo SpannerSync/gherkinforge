@@ -5,6 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spannersync/gherkinforge/internal/cli/lint"
+	"github.com/spannersync/gherkinforge/internal/cli/run"
 	"github.com/spannersync/gherkinforge/internal/cli/scaffold"
 )
 
@@ -19,6 +20,7 @@ and as deterministic anchors for AI-assisted hexagonal Go code generation.`,
 
 	root.AddCommand(scaffold.NewCommand())
 	root.AddCommand(lint.NewCommand())
+	root.AddCommand(run.NewCommand())
 
 	if err := root.Execute(); err != nil {
 		os.Exit(1)

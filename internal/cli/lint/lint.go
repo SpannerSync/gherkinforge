@@ -1,8 +1,8 @@
 // Package lint implements the `gforge lint` command.
 // It validates that every .feature file in the target directory tree:
 //
-//  1. Has exactly one tier tag: @business, @integration, or @nfr.
-//  2. @business files use at least one DataTable or DocString to anchor types.
+//  1. Has exactly one tier tag: @business, @contract, @nfr, @draft, or @integration.
+//  2. @business and @contract files use at least one DataTable or DocString to anchor types.
 //  3. No step text contains forbidden implementation symbols (SQL keywords,
 //     HTTP paths, selector strings, handler names).
 //  4. ZERO TRUST Pillar 2: @business steps must not contain UI/DOM language
@@ -27,8 +27,10 @@ import (
 
 var validTiers = map[string]bool{
 	"@business":    true,
-	"@integration": true,
+	"@contract":    true,
 	"@nfr":         true,
+	"@draft":       true,
+	"@integration": true, // legacy tier — kept for backward compatibility
 }
 
 // forbiddenPatterns are substrings that must not appear in any step text
@@ -113,16 +115,24 @@ func NewCommand() *cobra.Command {
 }
 
 // LintDir walks root recursively and lints every .feature file found.
+// It loads .gforge.yml from root (or any ancestor) to merge project-level
+// vocabulary rules with the built-in forbidden patterns.
 func LintDir(root string) ([]Violation, error) {
+	cfg, err := LoadConfig(root)
+	if err != nil {
+		return nil, fmt.Errorf("loading .gforge.yml: %w", err)
+	}
+	forbidden := buildForbidden(cfg)
+
 	var all []Violation
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() || !strings.HasSuffix(path, ".feature") {
 			return nil
 		}
-		vs, lintErr := LintFile(path)
+		vs, lintErr := LintFile(path, forbidden)
 		if lintErr != nil {
 			return lintErr
 		}
@@ -133,7 +143,9 @@ func LintDir(root string) ([]Violation, error) {
 }
 
 // LintFile parses a single .feature file and returns its violations.
-func LintFile(path string) ([]Violation, error) {
+// forbidden is the runtime list of banned substrings for this run; callers
+// that want the default rules should pass forbiddenPatterns directly.
+func LintFile(path string, forbidden []string) ([]Violation, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("opening %s: %w", path, err)
@@ -163,7 +175,7 @@ func LintFile(path string) ([]Violation, error) {
 		vs = append(vs, Violation{
 			File:    path,
 			Line:    int(doc.Feature.Location.Line),
-			Message: "missing tier tag — add @business, @integration, or @nfr",
+			Message: "missing tier tag — add @business, @contract, @nfr, or @draft",
 		})
 	}
 	if tierCount > 1 {
@@ -189,18 +201,18 @@ func LintFile(path string) ([]Violation, error) {
 		}
 
 		for _, step := range steps {
-			// Rule 2: @business files need at least one structured anchor.
+			// Rule 2: @business and @contract files need at least one structured anchor.
 			if step.DataTable != nil || step.DocString != nil {
 				hasDataTableOrDocString = true
 			}
 
 			// Rule 3: no forbidden implementation symbols in any step text.
-			for _, forbidden := range forbiddenPatterns {
-				if strings.Contains(step.Text, forbidden) {
+			for _, f := range forbidden {
+				if strings.Contains(step.Text, f) {
 					vs = append(vs, Violation{
 						File:    path,
 						Line:    int(step.Location.Line),
-						Message: fmt.Sprintf("forbidden symbol %q in step text — keep steps at business language level", forbidden),
+						Message: fmt.Sprintf("forbidden symbol %q in step text — keep steps at business language level", f),
 					})
 				}
 			}
@@ -225,11 +237,12 @@ func LintFile(path string) ([]Violation, error) {
 		}
 	}
 
-	if tier == "@business" && !hasDataTableOrDocString {
+	// Rule 2 (continued): structured anchor required for business and contract tiers.
+	if (tier == "@business" || tier == "@contract") && !hasDataTableOrDocString {
 		vs = append(vs, Violation{
 			File:    path,
 			Line:    int(doc.Feature.Location.Line),
-			Message: "@business feature must use at least one DataTable or DocString to anchor parameter types",
+			Message: fmt.Sprintf("%s feature must use at least one DataTable or DocString to anchor parameter types", tier),
 		})
 	}
 
