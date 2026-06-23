@@ -159,7 +159,28 @@ Copy the Cursor rules into your project:
 cp .cursor/rules/bdd-generation.mdc your-project/.cursor/rules/
 cp .cursor/rules/translate-legacy-gherkin.mdc your-project/.cursor/rules/
 ```
+The Full Pipeline (End-to-End)
 
+New feature requirement
+        ↓
+1. Write @business feature file (dual-audience: DataTable + DocString JSON)
+        ↓
+2. gforge lint — catches UI words, missing tier tag, malformed DataTables
+        ↓
+3. gforge scaffold --mode goa-design — emits design/design.go from feature spec
+        ↓
+4. goa gen — generates HTTP/gRPC transport, OpenAPI spec (zero-drift)
+        ↓
+5. Cursor + bdd-generation.mdc — implements domain aggregate, ports, adapters
+        ↓
+6. @integration tests — each scenario wrapped in pgxephemeraltest.TxFactory.Tx()
+   auto-rolls back, parallel-safe, 2ms per test
+        ↓
+7. go-mutesting — mutation gate blocks green CI if spec has no numeric invariants
+        ↓
+8. depguard — compiler blocks domain importing infrastructure packages
+        ↓
+SHIP ✓
 ---
 
 ## What We Are Not Claiming
