@@ -72,16 +72,19 @@ The `5998` is 2 × 2999. Verifiable in the spec. An AI mutant that corrupts the 
 
 It packages three things that emerged from solving the problem above:
 
-### 1. A Three-Tier Specification Model
+### 1. A Four-Tier Specification Model
 
 ```
 features/
-├── business/      @business    → godog + hand-written fakes
-├── integration/   @integration → testcontainers-go + real DB
-└── nfr/           @nfr         → Go benchmarks + fuzz
+├── business/      @business  → godog + hand-written fakes
+├── contract/      @contract  → pact-go consumer/provider verification
+├── nfr/           @nfr       → k6 load tests + Go benchmarks + fuzz
+└── draft/         @draft     → lint-only (work-in-progress, no runner yet)
 ```
 
-Each tier has one test runner. The tag is enforced by the linter — a file without a tier tag, or with two, is rejected.
+Each tier maps to exactly one test runner. The tag is enforced by the linter — a file without a tier tag, or with two, is rejected at CI time.
+
+`@business` and `@contract` files are also required to contain at least one DataTable or DocString. This is the structural anchor that prevents the AI from guessing schema from prose alone.
 
 ### 2. A CLI Tool (`gforge`)
 
@@ -89,11 +92,46 @@ Each tier has one test runner. The tag is enforced by the linter — a file with
 # Lint feature files against dual-audience rules
 gforge lint features/
 
+# Print the tier-to-runner routing table for a directory
+gforge run features/
+
 # Scaffold hexagonal Go skeleton from a feature file
 gforge scaffold --feature features/business/create_order.feature --out pkg/context/order
 ```
 
-The linter checks for UI/DOM vocabulary in `@business` steps (`click`, `button`, `xpath`, `browser` etc.) because these terms couple backend specifications to frontend rendering decisions — producing tests that break on cosmetic changes.
+**`gforge lint`** parses the Gherkin AST and checks for:
+- Missing or duplicate tier tags
+- `@business` / `@contract` files without a DataTable or DocString anchor
+- Forbidden implementation symbols in step text (`SELECT`, `/api/`, `.handler`, etc.)
+- UI/DOM vocabulary in `@business` steps (`click`, `button`, `xpath`, `browser`, etc.) — ZERO TRUST Pillar 2
+
+**`gforge run`** walks the directory, reads the tier tag from each `.feature` file, and prints the routing table:
+
+```
+FILE                                TIER        RUNNER
+features/business/create_order.feature   @business   godog
+features/contract/invoice_api.feature    @contract   pact-go
+features/nfr/order_throughput.feature    @nfr        k6
+features/draft/returns.feature           @draft      lint-only
+```
+
+Files with no tier tag show `unknown (run gforge lint first)`. Parse errors show `PARSE-ERROR` and the walk continues.
+
+**`.gforge.yml` — project-level vocabulary rules**
+
+Projects with domain-specific terminology can extend or override the built-in forbidden-word list without editing source code:
+
+```yaml
+# .gforge.yml  (place in project root or any ancestor directory)
+lint:
+  deny_terms:
+    - "use_case_ref"    # add custom forbidden substrings
+    - "repo_impl"
+  allow_terms:
+    - "/api/"           # suppress a built-in forbidden term for this project
+```
+
+`deny_terms` are appended to the built-in list. `allow_terms` remove matching entries from both the built-in list and any `deny_terms`. The package-level defaults are never mutated — each lint run builds its own slice.
 
 ### 3. AI Coding Agent Rules
 
@@ -145,13 +183,32 @@ gforge lint features/
 # ✓ No violations found.
 ```
 
+Print the routing table:
+```bash
+gforge run features/
+# FILE                                          TIER        RUNNER
+# features/business/create_order.feature        @business   godog
+# features/integration/order_persistence.feature @integration unknown (run gforge lint first)
+# features/nfr/order_throughput.feature          @nfr        k6
+```
+
 ---
 
 ## Using in Your Project
 
 ```bash
 go get github.com/spannersync/gherkinforge@latest
+
+# lint
 go run github.com/spannersync/gherkinforge/cmd/gforge lint your-features/
+
+# routing table
+go run github.com/spannersync/gherkinforge/cmd/gforge run your-features/
+
+# scaffold a new bounded context
+go run github.com/spannersync/gherkinforge/cmd/gforge scaffold \
+  --feature your-features/business/my_feature.feature \
+  --out pkg/context/mycontext
 ```
 
 Copy the Cursor rules into your project:
@@ -198,7 +255,7 @@ This was built to solve a specific problem. There are almost certainly better ap
 
 **We would genuinely like to know:**
 
-- Does the three-tier tag model map to how your team thinks about test layers?
+- Does the four-tier tag model (@business / @contract / @nfr / @draft) map to how your team thinks about test layers?
 - Are there Gherkin anti-patterns we missed that should be in the linter?
 - Is the affirmative constraint framing for AI rules actually measurably better, or is this premature optimisation?
 - What hexagonal architecture patterns in Go do you use that are not covered by the scaffold generator?
@@ -214,12 +271,13 @@ Full documentation with citations: [github.com/SpannerSync/gherkinforge/wiki](ht
 
 | Page | |
 |---|---|
-| [Getting Started](https://github.com/SpannerSync/gherkinforge/wiki/Getting-Started) | Install, run, scaffold |
-| [Three-Tier Specification Model](https://github.com/SpannerSync/gherkinforge/wiki/Three-Tier-Specification-Model) | Tag system explained with examples |
+| [Getting Started](https://github.com/SpannerSync/gherkinforge/wiki/Getting-Started) | Install, lint, run, scaffold |
+| [Four-Tier Specification Model](https://github.com/SpannerSync/gherkinforge/wiki/Four-Tier-Specification-Model) | @business / @contract / @nfr / @draft with examples |
 | [Hexagonal Architecture](https://github.com/SpannerSync/gherkinforge/wiki/Hexagonal-Architecture) | Layer rules and port patterns |
 | [Zero Trust Pillars](https://github.com/SpannerSync/gherkinforge/wiki/Zero-Trust-Pillars) | Four guardrails with code |
 | [AI Generation Rules](https://github.com/SpannerSync/gherkinforge/wiki/AI-Generation-Rules) | Both `.mdc` files explained |
-| [gforge CLI](https://github.com/SpannerSync/gherkinforge/wiki/Gforge-CLI) | Full command reference |
+| [gforge CLI](https://github.com/SpannerSync/gherkinforge/wiki/Gforge-CLI) | lint · run · scaffold — full command reference |
+| [Project Config (.gforge.yml)](https://github.com/SpannerSync/gherkinforge/wiki/Project-Config) | deny_terms / allow_terms vocabulary overrides |
 | [References](https://github.com/SpannerSync/gherkinforge/wiki/References) | Citations for every rule |
 
 ---
