@@ -1,0 +1,85 @@
+---
+description: GherkinForge AI Generation Rules — enforce dual-audience Gherkin and hexagonal architecture
+alwaysApply: true
+globs: "**/*.feature,**/domain/**,**/usecases/**,**/adapters/**"
+---
+
+# GherkinForge AI Generation Rules
+
+These rules bind AI coding agents when processing GherkinForge feature files
+and generating Go implementation code. Violations cause non-compilable or
+architecturally unsound output.
+
+---
+
+## Rule 1 — Architecture boundary
+
+All code inside `pkg/context/<name>/domain/` MUST NOT import:
+- `net/http` or any HTTP framework
+- `database/sql`, `pgx`, or any ORM or query builder
+- Any package from `adapters/` or `internal/`
+
+Domain code depends only on the Go standard library (`context`, `errors`,
+`time`, `fmt`) and other domain types within the same package.
+
+If an external dependency is needed inside domain code, define an interface
+(Port) and let adapters implement it.
+
+## Rule 2 — Generation sequence
+
+When scaffolding a new bounded context from a `.feature` file, always follow
+this exact order — never skip or reorder steps:
+
+1. Generate `pkg/context/<name>/domain/<name>.go` — aggregate root, value objects, sentinel errors.
+2. Generate `pkg/context/<name>/domain/ports.go` — repository and event interfaces (no impl).
+3. Generate `pkg/context/<name>/adapters/inmemory/repository.go` — in-memory port implementation.
+4. Generate `tests/fakes/<name>_repository_fake.go` and `tests/fakes/event_publisher_fake.go`.
+5. Generate `tests/godog_<name>_test.go` — godog suite initializer with `Strict: true`.
+6. Do NOT mark the task complete until `go test -run TestFeatures ./tests/...` passes GREEN.
+
+## Rule 3 — DataTables and DocStrings are mandatory anchors
+
+When reading a `.feature` file to drive code generation:
+- **DataTable columns** define exact Go struct field names and types. Generate
+  Go structs whose field names exactly match the column headers (snake_case →
+  CamelCase). Do not invent additional fields.
+- **DocString content** defines the JSON payload shape. Generate Go structs
+  from the JSON schema. Do not assume fields not present in the DocString.
+- If neither a DataTable nor a DocString is present for a typed parameter,
+  STOP and ask for the missing specification — never hallucinate types.
+
+## Rule 4 — int64 pence for all monetary values
+
+Any field representing money MUST be `int64` named with a `Pence` suffix
+(e.g. `TotalPence`, `UnitPence`, `AmountPence`).
+
+NEVER use `float64`, `float32`, `decimal.Decimal`, or `string` for monetary
+amounts. Floating-point arithmetic on money is a correctness bug, not a
+style issue.
+
+## Rule 5 — No complete without GREEN
+
+The task is not complete while `go test -run TestFeatures` prints any of:
+- `FAIL`
+- `undefined step`
+- `Pending`
+- compile error
+
+Iterate on step definitions and implementation until the output shows:
+```
+--- PASS: TestFeatures (x.xxs)
+PASS
+```
+Only then report the task as complete.
+
+---
+
+## Tier tag reference
+
+| Tag | Runner | Purpose |
+|-----|--------|---------|
+| `@business` | godog + hand-written fakes | Domain logic, aggregates, domain events |
+| `@integration` | testcontainers-go PostgreSQL | Adapter persistence round-trips |
+| `@nfr` | `testing.B` benchmarks + fuzz | Throughput, concurrency, data volume |
+
+Every `.feature` file MUST carry exactly one of these tags.
